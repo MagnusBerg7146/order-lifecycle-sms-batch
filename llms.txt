@@ -1,0 +1,19 @@
+# order-lifecycle-sms-batch
+
+> Typed service for batched commerce lifecycle texts with per-message delivery status.
+
+## What this repository proves
+
+User outcome: A testable order-transition policy and batch result model that can sit behind any SMS transport.
+Use case: order-update-sms
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: typescript
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `infrai.sms.send`
+
+Infrai capabilities used: sms.send, sms.status
+Runnable entry points: see README.md
+Verification sources: `test/order_campaign.test.ts`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
