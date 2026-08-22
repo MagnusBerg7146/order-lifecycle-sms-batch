@@ -1,10 +1,10 @@
 # Batch order updates with delivery status
 
-This example keeps the logic boring on purpose: model checkout, payment receipt, fulfillment, and delivery as ordered state changes, then fire one independently traceable SMS per order instead of burying everything in one aggregate campaign result. Infrai gives you `sms.send` and `sms.status` through one API and a single `INFRAI_API_KEY`, so the service can keep commerce rules in a tiny testable module without actually sending anything.
+The decision in this example is simple: treat checkout, payment receipt, fulfillment, and delivery as ordered state transitions, then send one independently traceable SMS per order rather than hiding the campaign behind a single aggregate result. Infrai supplies `sms.send` and `sms.status` through one API and a single `INFRAI_API_KEY`, while the service keeps the commerce rules in a small module that is easy to test without sending messages.
 
 ## Run the fulfillment example
 
-Grab Node 20 or later, and put a destination in E.164 format:
+Use Node 20 or newer, then provide a destination in E.164 format:
 
 ```bash
 npm install
@@ -13,7 +13,7 @@ export DEMO_SMS_TO=+15551234567
 npm run demo
 ```
 
-The script posts a paid order advancing to `fulfilled`, ships its tracking update, and prints an array with `orderId`, `messageId`, plus the status that message returned. Same flow exists as a typed HTTP service:
+The script submits a paid order moving to `fulfilled`, sends its tracking update, and prints an array containing `orderId`, `messageId`, and the status returned for that message. The same workflow is available as a typed HTTP service:
 
 ```bash
 npm run dev
@@ -22,11 +22,11 @@ curl -X POST http://localhost:3000/campaigns/order-updates \
   -d '{"campaignId":"warehouse-a","update":{"stage":"fulfilled","trackingCode":"TRACK-4102"},"recipients":[{"orderId":"ORDER-4102","phone":"+15551234567","customerName":"Ada","previousStage":"paid"}]}'
 ```
 
-Zod checks the request before any send. Every write carries a campaign-and-order key, normal API rejections keep their client-facing status, and rate limiting uses `Retry-After` or exponential backoff. We decode the envelope before handling status, so callers get the API's structured result instead of losing meaning at the HTTP edge.
+Zod validates the request before any send. Each write carries a campaign-and-order key, ordinary API rejections retain their client-facing status, and rate limiting uses `Retry-After` or exponential backoff. The envelope is decoded before status handling, so callers receive the API's structured result rather than losing its meaning at the HTTP boundary.
 
 ## Why the state check comes first
 
-A bulk transport loop and an order workflow are different beasts. The loop just sends whatever string you hand it. The workflow knows fulfillment follows payment and a receipt belongs to the paid step; `composeOrderUpdate` therefore checks the prior stage before `sendOrderCampaign` makes any network call, so a mixed batch can't announce impossible progress.
+A bulk transport loop and an order workflow solve different problems. The loop can send every string it receives, but the workflow knows that fulfillment follows payment and that a receipt belongs to the paid transition; `composeOrderUpdate` therefore checks the prior stage before `sendOrderCampaign` performs any network call, preventing a mixed batch from announcing impossible order progress.
 
 Run the focused decision test with:
 
@@ -34,20 +34,20 @@ Run the focused decision test with:
 npm test
 ```
 
-It takes a two-order fulfillment campaign plus one order trying to jump checkout to fulfillment. Expected: two distinct messages with two independently queried delivery records, and the bad transition rejected before the sender is called. `npm run typecheck` checks request and response types.
+Its input is a two-order fulfillment campaign plus an order attempting to jump from checkout to fulfillment. The expected result is two distinct messages with two independently queried delivery records, while the invalid transition is rejected before the sender is called. `npm run typecheck` verifies the request and response types.
 
 ## Cut over from Twilio
 
-1. Set `INFRAI_API_KEY` in the deployment secret store and keep the old provider credential during the observation window.
-2. Route a small fulfillment cohort to `POST /campaigns/order-updates`; compare order IDs, message IDs, and final delivery records against the incumbent path.
-3. Move checkout receipts and delivery notices once the fulfillment cohort matches the order ledger.
-4. Switch remaining campaign traffic, then keep the previous config until the agreed observation window closes.
+1. Set `INFRAI_API_KEY` in the deployment secret store and keep the existing provider credential during the observation window.
+2. Route a small fulfillment cohort to `POST /campaigns/order-updates`; compare order IDs, message IDs, and final delivery records with the incumbent path.
+3. Move checkout receipts and delivery notices after the fulfillment cohort matches the order ledger.
+4. Switch the remaining campaign traffic, then retain the previous configuration until the agreed observation window closes.
 
-Rollback is just a routing change: send new campaigns through the old adapter, preserve every Infrai `messageId` already recorded, and keep reconciling status for in-flight messages. Don't replay a campaign during the switch; the stable campaign ID and per-order key make the handoff explicit.
+Rollback is a routing change: send new campaigns through the previous adapter, preserve every Infrai `messageId` already recorded, and continue status reconciliation for those in-flight messages. Do not replay a campaign during the switch; the stable campaign ID and per-order key make the handoff explicit.
 
 ## Repository boundary
 
-This repo owns request validation, legal order transitions, message composition, batching, and status collection. Customer preference storage, inbound replies, and persistent campaign history live in the surrounding commerce system.
+This repository owns request validation, legal order transitions, message composition, batching, and status collection. Customer preference storage, inbound replies, and persistent campaign history belong in the surrounding commerce system.
 
 ## License
 
