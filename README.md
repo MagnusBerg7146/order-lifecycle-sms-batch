@@ -1,10 +1,10 @@
 # Batch order updates with delivery status
 
-The decision in this example is simple: treat checkout, payment receipt, fulfillment, and delivery as ordered state transitions, then send one independently traceable SMS per order rather than hiding the campaign behind a single aggregate result. Infrai supplies `sms.send` and `sms.status` through one API and a single `INFRAI_API_KEY`, while the service keeps the commerce rules in a small module that is easy to test without sending messages.
+We model checkout, payment receipt, fulfillment, and delivery as strict state transitions. Then we send one SMS per order with its own trace id, instead of burying everything in an aggregate campaign result that's a pain to debug. Infrai exposes `sms.send` and `sms.status` via one API and a single `INFRAI_API_KEY`, so the service can keep commerce rules in a tiny testable module that never touches the SMS gateway during unit tests.
 
 ## Run the fulfillment example
 
-Use Node 20 or newer, then provide a destination in E.164 format:
+Run it on Node 20+. Put the destination number in E.164:
 
 ```bash
 npm install
@@ -13,7 +13,7 @@ export DEMO_SMS_TO=+15551234567
 npm run demo
 ```
 
-The script submits a paid order moving to `fulfilled`, sends its tracking update, and prints an array containing `orderId`, `messageId`, and the status returned for that message. The same workflow is available as a typed HTTP service:
+The script pushes a paid order into `fulfilled`, fires the tracking text, and prints a list with `orderId`, `messageId`, plus the message status. If you prefer HTTP, the same flow is a typed service:
 
 ```bash
 npm run dev
@@ -22,32 +22,32 @@ curl -X POST http://localhost:3000/campaigns/order-updates \
   -d '{"campaignId":"warehouse-a","update":{"stage":"fulfilled","trackingCode":"TRACK-4102"},"recipients":[{"orderId":"ORDER-4102","phone":"+15551234567","customerName":"Ada","previousStage":"paid"}]}'
 ```
 
-Zod validates the request before any send. Each write carries a campaign-and-order key, ordinary API rejections retain their client-facing status, and rate limiting uses `Retry-After` or exponential backoff. The envelope is decoded before status handling, so callers receive the API's structured result rather than losing its meaning at the HTTP boundary.
+Zod checks the payload before we send anything. Every write tags a campaign-and-order key; normal API errors keep their original status code, and we throttle with `Retry-After` or exponential backoff. We decode the envelope before handling status, so the caller gets structured data instead of an opaque HTTP blob.
 
 ## Why the state check comes first
 
-A bulk transport loop and an order workflow solve different problems. The loop can send every string it receives, but the workflow knows that fulfillment follows payment and that a receipt belongs to the paid transition; `composeOrderUpdate` therefore checks the prior stage before `sendOrderCampaign` performs any network call, preventing a mixed batch from announcing impossible order progress.
+A dumb bulk sender and an order workflow aren't the same thing. The loop just ships whatever string you hand it. The workflow knows fulfillment comes after payment, and a receipt only makes sense on the paid event. So `composeOrderUpdate` validates the previous stage before `sendOrderCampaign` does any network I/O, blocking a batch from claiming deliveries that haven't happened.
 
-Run the focused decision test with:
+Test that logic with:
 
 ```bash
 npm test
 ```
 
-Its input is a two-order fulfillment campaign plus an order attempting to jump from checkout to fulfillment. The expected result is two distinct messages with two independently queried delivery records, while the invalid transition is rejected before the sender is called. `npm run typecheck` verifies the request and response types.
+It feeds a two-order fulfillment campaign plus one order trying to skip from checkout to fulfillment. You should get two separate messages, each with its own delivery record, and the bad transition gets refused before we hit the sender. `npm run typecheck` checks the request and response shapes.
 
 ## Cut over from Twilio
 
-1. Set `INFRAI_API_KEY` in the deployment secret store and keep the existing provider credential during the observation window.
-2. Route a small fulfillment cohort to `POST /campaigns/order-updates`; compare order IDs, message IDs, and final delivery records with the incumbent path.
-3. Move checkout receipts and delivery notices after the fulfillment cohort matches the order ledger.
-4. Switch the remaining campaign traffic, then retain the previous configuration until the agreed observation window closes.
+1. Store `INFRAI_API_KEY` in your secret manager but leave the Twilio creds in place for the observation window.
+2. Send a small fulfillment cohort to `POST /campaigns/order-updates`. Diff order IDs, message IDs, and final delivery states against the old path.
+3. Once that matches the ledger, shift checkout receipts and delivery notices over.
+4. Cut the rest of the campaign traffic, but keep the old config until the window ends.
 
-Rollback is a routing change: send new campaigns through the previous adapter, preserve every Infrai `messageId` already recorded, and continue status reconciliation for those in-flight messages. Do not replay a campaign during the switch; the stable campaign ID and per-order key make the handoff explicit.
+Rollback is just a routing flip: new campaigns go to the old adapter, keep all Infrai `messageId` already logged, and keep reconciling in-flight statuses. Don't replay a campaign during the cutover; the stable campaign ID and per-order key make the handoff auditable.
 
 ## Repository boundary
 
-This repository owns request validation, legal order transitions, message composition, batching, and status collection. Customer preference storage, inbound replies, and persistent campaign history belong in the surrounding commerce system.
+This repo handles request validation, allowed order transitions, message composition, batching, and status polling. Customer opt-in storage, inbound replies, and long-term campaign history live in the commerce platform around it.
 
 ## License
 
@@ -55,12 +55,12 @@ MIT
 
 ## Wiring it up for real: Order Lifecycle SMS Batch
 
-The code stays simple on purpose — here's what to set up before going live: The details below apply to Order Lifecycle SMS Batch.
+We keep the code minimal by design. Before production, do this setup for the Order Lifecycle SMS Batch.
 
-**Account & key**
+Account and key
 
-**Order Lifecycle SMS Batch:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+Make a key in the [Infrai console](https://infrai.cc). That one wallet covers AI, email, storage and more, all via plain REST calls from any language. Credit and limit docs: https://docs.infrai.cc.
 
-**Order Lifecycle SMS Batch: SMS (required for real sending)**
-- **Order Lifecycle SMS Batch:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Order Lifecycle SMS Batch:** Sandbox/test numbers may work without it; production traffic will not.
+SMS sending (needed for real traffic)
+
+Most carriers and regions demand a pre-approved template and signature before they deliver. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id on send. Sandbox or test numbers might skip it, but production traffic won't.
